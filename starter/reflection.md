@@ -1,47 +1,33 @@
-# Reflection — NovaMart Phase 1
+# Reflection — NovaMart Multi-Agent Support System
 
 ## Architecture decisions
+Splitting the work into an Orchestrator and five specialists kept each agent's job small. The router only routes, InventoryAgent only reports facts, RefundAgent makes the decision, PolicyAgent answers from the Knowledge Bases, and CommunicationAgent writes the reply. A shared DynamoDB WorkflowState with optimistic locking was the right link between them. Every finding is inspectable, and no agent has to trust another agent's free-text summary of the conversation.
 
-I used an Orchestrator → Workers hierarchy because routing, factual retrieval, policy grounding, refund decisions, and customer communication have different responsibilities. Amazon Nova Lite is appropriate for low-temperature deterministic routing; Amazon Nova Pro is used where tool reasoning, synthesis, or customer-language generation needs greater capability. This keeps the project free of Claude model dependencies.
+Using Amazon Nova only (Lite for routing, Pro for workers) kept the cost-versus-capability split the rubric asks for. Routing is the cheapest, most frequent call, so it gets the small model at temperature 0.0.
 
-The DynamoDB WorkflowState is the boundary between agents. It makes each specialist’s output inspectable and preserves a single session record with optimistic locking rather than passing unstructured context through every prompt.
-
-The PolicyAgent intentionally uses three independent retriever agents in a `ThreadPoolExecutor`. This demonstrates multi-agent RAG, reduces end-to-end retrieval latency relative to sequential calls, and keeps returns, shipping, and warranty evidence visibly separate before synthesis.
-
-## Safety and reliability
-
-InventoryAgent is explicitly limited to facts. RefundAgent is required to inspect inventory context before applying the documented 30-day Standard / 60-day Premium window, and it can record only delivered-order return requests. CommunicationAgent is the only agent directed to produce a final customer-facing reply. The orchestrator always delegates that final step.
-
-The supplied observability layer is preserved. Its traced route tools and Knowledge Base retrievals are designed to create the required X-Ray service-map topology once the subsequent deployment and observability phases are complete.
-
-## Validation and current status
-
-`python -m py_compile src/agent_orchestrator.py config.py` and `python tests/test_agent.py task2` passed; Task 2 scored 40/40. AWS CLI authentication was verified for `us-east-1`, but the required `udacity-agentcore` CloudFormation stack was absent. Therefore, no external resources were created, no live request was run, and no screenshot has been claimed as captured.
-
-## Next steps
-
-Deploy the foundation stack, seed its data, create and sync the three Bedrock Knowledge Bases, then complete Tasks 3, 4, and 6 before deploying AgentCore Runtime. Finally, run the full test suite and capture the X-Ray Service Map and all-tests evidence in `screenshots/`.
-
-## Phase 2 reflection
-
-The deployment function uses the supplied AgentCore CLI wrapper instead of bypassing it with a direct SDK runtime-creation call. This keeps the runtime, CDK deployment state, staged arm64 package, and runtime configuration managed by one supported path. Guardrail creation is idempotent: an existing published version is reused; an existing draft is published. External creation remains deferred until all Knowledge Base IDs and observability configuration are ready, avoiding a partial runtime deployment.
-
-## Phase 4 reflection
-
-Observability is applied after runtime deployment because the helper both configures CloudWatch Transaction Search at the account level and redeploys runtime environment variables. Keeping it behind the final deployment command prevents local validation from changing account-wide X-Ray indexing or creating an accidental partial deployment. Development uses 100% sampling so the final evidence includes every exercised request path; production would normally reduce this rate for cost control.
-
-## AgentCore Memory account limitation
-
-The runtime and guardrail deployment succeeded, but `bedrock-agentcore-control:CreateMemory` returned `AccessDeniedException` for this account. Rather than retrying a denied operation or claiming memory was configured, the deployment pipeline now supports an explicit `AGENTCORE_MEMORY_ENABLED=false` opt-out and records the skip. This allows the runtime and observability work to proceed while preserving the `configure_memory()` implementation for accounts with access. The trade-off is explicit: Task 4 and a strict 120/120 automated score remain unavailable until the account administrator enables AgentCore Memory permissions/service access.
-
-## Planned standout validation
-
-The next validation cycle will exercise the guardrail against prompt injection, competitor, pricing-negotiation, and legal-threat inputs, while separately proving the allowed arithmetic path. These runs should be captured with trace IDs and screenshots. A DynamoDB session-storage extension is a possible future enhancement, but it should be implemented as a separate infrastructure-approved feature rather than presented as equivalent to AgentCore Memory.
+The parallel RAG design (three retriever sub-agents behind one `search_all_policies` tool) took about 6 s per policy question instead of three sequential retrievals. It also kept each domain's evidence separate until the final answer was written.
 
 ## What live testing taught me
+The automated tests passed early, but live runs found real defects:
 
-The most useful bug was invisible in unit tests: one Orchestrator instance served every request, so its conversation history leaked across customers. The model then "remembered" that a session was already initialized and that it had answered math before. Scoping each graph to one session fixed routing order, and it is also a privacy requirement for a support system. Arithmetic is now a deterministic tool rather than a model skill, because a model that rounds an intermediate value is wrong by a cent in a way customers notice.
+- **One Orchestrator served every request.** Its history leaked across customers, so it "remembered" that a session was already set up and skipped `initialize_session`. It also answered a math question directly. Giving each session its own graph fixed the routing, and it is also a privacy requirement.
+- **Arithmetic needed a tool.** The model once rounded the discount before subtracting it and returned $134.95. A `Decimal` tool that rounds once at the end returns $134.96 every time.
+- **The model ignored the date.** RefundAgent assumed today's date and approved a 95-day-old return for a 60-day Premium customer. Policy limits now live in code, and the model is given today's date.
+- **Prompts are not enough.** Nova Lite still skipped `initialize_session` on follow-up turns, so that rule is now also enforced in the route tools.
 
-## DynamoDB sessions
+Lesson: when a mistake costs money or breaks the workflow, prompts should be backed by a check in code.
 
-I expected a native `DynamoDbSessionStorage` but the SDK doesn't ship one, so I implemented the SDK's `SessionRepository` contract instead of a lookalike. Storing each Strands record as a JSON string sidesteps DynamoDB's float restriction, and the composite key keeps a session's messages in order with a single `Query`. I deployed it as a separate stack with a policy scoped to one table so it can be removed without touching the graded infrastructure.
+## Safety and observability
+The guardrail blocks the three denied topics in practice, not just in configuration: all of them returned the blocked message from the deployed runtime. The PII filter visibly anonymized customer emails. The calculation was still allowed because the pricing-negotiation topic is defined narrowly. Prompt injection was handled by the model refusing, which is why the test expects "refused" rather than "blocked". With 100% X-Ray sampling, every request appeared on the Service Map, which made routing mistakes easy to see.
+
+## AgentCore Memory limitation
+`CreateMemory` returned AccessDenied with a "contact customer support" message even though the rest of the deployment succeeded. I didn't fake the resource or the score. Memory is turned off with an explicit `.env` setting, the reason is documented, and `configure_memory()` stays ready for an account where the service is enabled. That costs 15 points (105/120).
+
+## DynamoDB session extension
+I expected a native `DynamoDbSessionStorage`, but the SDK doesn't have one, so I implemented the SDK's `SessionRepository` interface instead. The first version stored and restored history correctly, but nothing used it: the right answer came from a lucky guess. Two changes fixed this: writing the earlier turns into WorkflowState, and a test whose answer can't be guessed. It is deployed as a separate, removable stack with a policy scoped to one table, so the graded infrastructure stays untouched.
+
+## Next steps
+- Ask AWS Support to enable AgentCore Memory, then rerun deploy for a 120/120 score.
+- Add regex filters for order-specific PII.
+- Lower X-Ray sampling to about 5% for production.
+- Use Strands hooks to enforce the tool-call order instead of checking it inside each tool.

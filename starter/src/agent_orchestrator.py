@@ -443,7 +443,17 @@ to the RefundAgent."""
 
     @tool
     def check_order_status(customer_id: str, order_id: str) -> dict:
-        """Look up an order by its customer ID and order ID. Return facts only; never decide eligibility."""
+        """
+        Look up one order in DynamoDB and report its facts. Never decides return eligibility.
+
+        Args:
+            customer_id: The customer's unique identifier (e.g. CUST-001); Orders partition key
+            order_id: The order identifier (e.g. ORD-27176); Orders sort key
+
+        Returns:
+            {'found': True, 'order': {...}} with status, product, dates and price,
+            or {'found': False, 'message': ...} when no such order exists
+        """
         response = dynamodb.Table(config.ORDERS_TABLE).get_item(
             Key={'customer_id': customer_id, 'order_id': order_id}
         )
@@ -455,7 +465,17 @@ to the RefundAgent."""
 
     @tool
     def get_customer_tier(customer_id: str) -> dict:
-        """Retrieve a customer's account profile and tier from DynamoDB; return facts only."""
+        """
+        Retrieve a customer's profile and tier (Standard or Premium) from DynamoDB.
+        Standard customers have a 30-day return window; Premium customers have 60 days.
+
+        Args:
+            customer_id: The customer's unique identifier (e.g. CUST-001)
+
+        Returns:
+            {'found': True, 'customer': {...}} including tier and account details,
+            or {'found': False, 'message': ...} when the customer does not exist
+        """
         response = dynamodb.Table(config.CUSTOMERS_TABLE).get_item(
             Key={'customer_id': customer_id}
         )
@@ -467,7 +487,16 @@ to the RefundAgent."""
 
     @tool
     def list_customer_orders(customer_id: str) -> dict:
-        """Retrieve all orders for one customer from DynamoDB, without making decisions."""
+        """
+        Retrieve every order for one customer from DynamoDB (paginated query), facts only.
+
+        Args:
+            customer_id: The customer's unique identifier (e.g. CUST-001)
+
+        Returns:
+            {'customer_id': ..., 'count': n, 'orders': [...]} with order_id, status,
+            order_date and price for each order
+        """
         response = dynamodb.Table(config.ORDERS_TABLE).query(
             KeyConditionExpression=Key('customer_id').eq(customer_id)
         )
@@ -519,7 +548,17 @@ If initiate_refund declines, report its factual reason as the decision."""
 
     @tool
     def get_inventory_context(session_id: str) -> dict:
-        """Read InventoryAgent facts plus today's date, customer tier and return window before deciding."""
+        """
+        Read the facts the InventoryAgent stored in WorkflowState. Call this before deciding.
+
+        Args:
+            session_id: The current session identifier
+
+        Returns:
+            Dict with 'inventory_agent' (InventoryAgent findings, '' if not yet set),
+            'customer_id', 'today' (ISO date), 'customer_tier' and 'return_window_days'
+            (30 Standard / 60 Premium), or {'found': False, ...} if the session is missing
+        """
         state = _read_workflow_state(session_id)
         if not state:
             return {'found': False, 'message': 'Workflow session was not found.'}
@@ -533,7 +572,20 @@ If initiate_refund declines, report its factual reason as the decision."""
 
     @tool
     def initiate_refund(customer_id: str, order_id: str, reason: str) -> dict:
-        """Record a return for a delivered order inside the tier's return window; declines otherwise."""
+        """
+        Initiate a return by updating the order record in DynamoDB. The order must be
+        delivered and inside the tier's return window (30 days Standard, 60 Premium);
+        otherwise the request is declined with the reason.
+
+        Args:
+            customer_id: The customer's unique identifier
+            order_id: The order to return
+            reason: Customer-provided reason for the return
+
+        Returns:
+            {'initiated': True, 'return_reference': 'RET-...', 'message': instructions},
+            or {'initiated': False, 'message': reason for declining}
+        """
         table = dynamodb.Table(config.ORDERS_TABLE)
         order = table.get_item(Key={'customer_id': customer_id, 'order_id': order_id}).get('Item')
         if not order:
@@ -588,10 +640,19 @@ def build_policy_agent() -> Agent:
 
     @tool
     def retrieve_returns_policy(query: str) -> str:
-        """Retrieve grounded passages relevant to a policy question from the Returns Knowledge Base."""
+        """
+        Retrieve relevant passages from the Returns Policy knowledge base.
+
+        Args:
+            query: The customer's policy question
+
+        Returns:
+            Formatted passages with their S3 source URIs
+        """
         return format_kb_results(retrieve_from_knowledge_base(config.RETURNS_KB_ID, query))
 
     returns_retriever = Agent(
+        name='ReturnsPolicyRetrieverAgent',
         model=BedrockModel(model_id=config.WORKER_MODEL_ID, region_name=config.AWS_REGION, temperature=0.0),
         system_prompt="You retrieve Returns policy evidence. Always call your retrieval tool, then return only grounded passages and sources.",
         tools=[retrieve_returns_policy],
@@ -599,10 +660,19 @@ def build_policy_agent() -> Agent:
 
     @tool
     def retrieve_shipping_policy(query: str) -> str:
-        """Retrieve grounded passages relevant to a policy question from the Shipping Knowledge Base."""
+        """
+        Retrieve relevant passages from the Shipping Policy knowledge base.
+
+        Args:
+            query: The customer's policy question
+
+        Returns:
+            Formatted passages with their S3 source URIs
+        """
         return format_kb_results(retrieve_from_knowledge_base(config.SHIPPING_KB_ID, query))
 
     shipping_retriever = Agent(
+        name='ShippingPolicyRetrieverAgent',
         model=BedrockModel(model_id=config.WORKER_MODEL_ID, region_name=config.AWS_REGION, temperature=0.0),
         system_prompt="You retrieve Shipping policy evidence. Always call your retrieval tool, then return only grounded passages and sources.",
         tools=[retrieve_shipping_policy],
@@ -610,10 +680,19 @@ def build_policy_agent() -> Agent:
 
     @tool
     def retrieve_warranty_policy(query: str) -> str:
-        """Retrieve grounded passages relevant to a policy question from the Warranty Knowledge Base."""
+        """
+        Retrieve relevant passages from the Warranty Policy knowledge base.
+
+        Args:
+            query: The customer's policy question
+
+        Returns:
+            Formatted passages with their S3 source URIs
+        """
         return format_kb_results(retrieve_from_knowledge_base(config.WARRANTY_KB_ID, query))
 
     warranty_retriever = Agent(
+        name='WarrantyPolicyRetrieverAgent',
         model=BedrockModel(model_id=config.WORKER_MODEL_ID, region_name=config.AWS_REGION, temperature=0.0),
         system_prompt="You retrieve Warranty policy evidence. Always call your retrieval tool, then return only grounded passages and sources.",
         tools=[retrieve_warranty_policy],
@@ -621,7 +700,19 @@ def build_policy_agent() -> Agent:
 
     @tool
     def search_all_policies(query: str) -> str:
-        """Query the Returns, Shipping, and Warranty Knowledge Bases concurrently and combine grounded evidence."""
+        """
+        Query all three policy knowledge bases IN PARALLEL and return combined results.
+
+        Runs ReturnsPolicyRetrieverAgent, ShippingPolicyRetrieverAgent and
+        WarrantyPolicyRetrieverAgent simultaneously (ThreadPoolExecutor, max_workers=3)
+        and collects their findings as each completes.
+
+        Args:
+            query: The customer's policy question
+
+        Returns:
+            Combined policy passages, one section per domain (Returns, Shipping, Warranty)
+        """
         retrievers = {
             'Returns': returns_retriever,
             'Shipping': shipping_retriever,
@@ -702,7 +793,16 @@ customer-facing message; never describe your tool calls or internal steps."""
 
     @tool
     def get_full_workflow_context(session_id: str) -> dict:
-        """Read all prior worker findings in WorkflowState before composing the final customer response."""
+        """
+        Read the complete WorkflowState to access all findings from previous agents.
+
+        Args:
+            session_id: The current session identifier
+
+        Returns:
+            Full WorkflowState dict (inventory_agent, policy_agent, refund_agent,
+            conversation_history, ...), or {'found': False, ...} if the session is missing
+        """
         state = _read_workflow_state(session_id)
         if not state:
             return {'found': False, 'message': 'Workflow session was not found.'}
@@ -903,7 +1003,18 @@ Never return text to the customer outside route_to_communication_agent's result.
 
     @tool
     def route_to_inventory_agent(session_id: str, customer_id: str, request: str) -> str:
-        """Route an order, return, or account-tier request to InventoryAgent to gather DynamoDB facts first."""
+        """
+        Route an order or account request to the Inventory Agent to gather facts.
+        Call this FIRST for order status, order history, returns, and tier questions.
+
+        Args:
+            session_id:  The current session identifier (from the customer request)
+            customer_id: The customer's unique identifier
+            request:     The customer's original request
+
+        Returns:
+            Inventory facts retrieved by the InventoryAgent (also stored in WorkflowState)
+        """
         _ensure_turn_initialized(session_id, customer_id)
         return _run_and_store(
             'inventory_agent', session_id, inventory_agent,
@@ -913,7 +1024,17 @@ Never return text to the customer outside route_to_communication_agent's result.
 
     @tool
     def route_to_policy_agent(session_id: str, request: str) -> str:
-        """Route a policy-meaning question to PolicyAgent for parallel grounded Knowledge Base retrieval."""
+        """
+        Route a policy question to the Policy Agent (multi-agent RAG).
+        Call this for questions about return policies, shipping, or warranties.
+
+        Args:
+            session_id: The current session identifier
+            request:    The customer's policy question
+
+        Returns:
+            Policy answer synthesized by PolicyAgent (also stored in WorkflowState)
+        """
         _ensure_turn_initialized(session_id)
         return _run_and_store(
             'policy_agent', session_id, policy_agent,
@@ -922,7 +1043,18 @@ Never return text to the customer outside route_to_communication_agent's result.
 
     @tool
     def route_to_refund_agent(session_id: str, customer_id: str, request: str) -> str:
-        """Route a return or refund request to RefundAgent only after InventoryAgent has stored facts."""
+        """
+        Route a return/refund request to the Refund Agent.
+        Call this AFTER route_to_inventory_agent has gathered order facts.
+
+        Args:
+            session_id:  The current session identifier
+            customer_id: The customer's unique identifier
+            request:     The return/refund request
+
+        Returns:
+            Refund decision from the RefundAgent (also stored in WorkflowState)
+        """
         _ensure_turn_initialized(session_id, customer_id)
         state = _current_state(session_id)
         if not state.get('inventory_agent'):
@@ -936,7 +1068,18 @@ Never return text to the customer outside route_to_communication_agent's result.
     @tool
     def route_to_communication_agent(session_id: str, customer_id: str,
                                      original_request: str) -> str:
-        """Route to CommunicationAgent last to produce the only customer-facing response."""
+        """
+        Route to the Communication Agent to compose the final customer response.
+        Call this LAST - after all relevant worker agents have run.
+
+        Args:
+            session_id:       The current session identifier
+            customer_id:      The customer's unique identifier
+            original_request: The customer's original message
+
+        Returns:
+            Final customer-facing response drafted by CommunicationAgent
+        """
         _ensure_turn_initialized(session_id, customer_id)
         return _run_and_store(
             'communication_agent', session_id, communication_agent,
@@ -946,7 +1089,17 @@ Never return text to the customer outside route_to_communication_agent's result.
 
     @tool
     def initialize_session(session_id: str, customer_id: str) -> str:
-        """Start a new request: create (or reset) the WorkflowState before any routing. Call first on EVERY turn."""
+        """
+        Create the WorkflowState record for this request (reset it on a follow-up turn).
+        Call this at the VERY BEGINNING of processing every customer request.
+
+        Args:
+            session_id:  A unique identifier for this session
+            customer_id: The customer's identifier
+
+        Returns:
+            Confirmation that the session was initialized for this turn
+        """
         if turn_state['initialized_turn'] is not None and turn_state['initialized_turn'] == _turn_marker():
             # Already initialized for this turn - never wipe findings stored in it.
             return f'Workflow session {session_id} is already initialized for this turn.'

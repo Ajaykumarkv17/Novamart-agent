@@ -1,21 +1,33 @@
 # NovaMart Multi-Agent Customer Support — Solution
 
-Capstone 3.3 — Strands Agents SDK + Amazon Bedrock AgentCore, deployed to AWS account `992382390542` in `us-east-1`.
+Capstone 3.3 — Strands Agents SDK + Amazon Bedrock AgentCore, deployed to AWS account `065988995349` in `us-east-1`.
 
 ## Result summary
 
-| Task | Area | Score | Status |
-|---|---|---:|---|
-| 2 | Multi-agent graph | 40 / 40 | Passed |
-| 3 | AgentCore Runtime + Guardrails | 20 / 20 | Passed |
-| 4 | AgentCore Memory | 0 / 15 | **Blocked by an AWS account restriction** (see below) |
-| 5 | Bedrock Knowledge Bases | 25 / 25 | Passed |
-| 6 | Observability (CloudWatch + X-Ray) | 20 / 20 | Passed |
-| | **Total** (`python tests/test_agent.py all`) | **105 / 120** | |
+| Task | Area | Score |
+|---|---|---:|
+| 2 | Multi-agent graph | 40 / 40 |
+| 3 | AgentCore Runtime + Guardrails | 20 / 20 |
+| 4 | AgentCore Memory | 15 / 15 |
+| 5 | Bedrock Knowledge Bases | 25 / 25 |
+| 6 | Observability (CloudWatch + X-Ray) | 20 / 20 |
+| | **Total** (`python tests/test_agent.py all`) | **120 / 120** |
 
 Extras beyond the rubric:
-- Adversarial guardrail validation: 5/5 pass.
-- Persistent conversation history in DynamoDB through a custom Strands session repository: verified locally and through the deployed runtime.
+- Adversarial guardrail validation: 5/5 pass against the deployed runtime.
+- Persistent conversation history in DynamoDB through a custom Strands session repository, verified locally and through the deployed runtime.
+
+## Deployed resources
+
+| Resource | Identifier |
+|---|---|
+| Foundation stack | `udacity-agentcore` |
+| AgentCore Runtime | `udacity_agentcore_runtime-GF9UVdHh9F` (stack `AgentCore-udacity-default`) |
+| Runtime ARN | `arn:aws:bedrock-agentcore:us-east-1:065988995349:runtime/udacity_agentcore_runtime-GF9UVdHh9F` |
+| Guardrail | `p36iltobtfn6`, version `1` |
+| AgentCore Memory | `udacity_agentcore_memory-YxJfPa8yAn` (ACTIVE) |
+| Knowledge Bases | Returns `EHCHIODFGJ`, Shipping `YZNMGD1NK9`, Warranty `CGR7RTNXKZ` |
+| Sessions stack | `udacity-agentcore-agent-sessions` |
 
 ## Model choice: Amazon Nova instead of Claude
 
@@ -42,6 +54,7 @@ Customer request
       ├─ InventoryAgent .......................... account / tier questions
       └─ CommunicationAgent (always last) ........ the only customer-facing reply
 Shared state: DynamoDB WorkflowStateTable (optimistic locking)
+Session summaries: AgentCore Memory (SESSION_SUMMARY, 7-day retention)
 Conversation history: DynamoDB agent-sessions table (extension)
 ```
 
@@ -72,28 +85,31 @@ Verified routing (live `python src/agent_orchestrator.py test`):
 | 5 items at $29.99 with 10% off | Orchestrator → Communication only. Result `$134.96` |
 
 ### AgentCore Runtime and Guardrails
-- **Guardrail** `nn1xj4lj97ni`, published version `1`:
+- **Guardrail** `p36iltobtfn6`, published version `1`:
   - Content filters: SEXUAL, VIOLENCE and HATE at HIGH; INSULTS and MISCONDUCT at MEDIUM.
   - PII: credit card numbers and SSNs are blocked; email and phone are anonymized.
   - STANDARD-tier DENY topics: competitor products, pricing negotiations, legal threats. Pricing negotiation is defined so that a calculation using a given price and discount is still allowed.
   - Managed profanity list enabled. Uses the `us.guardrail.v1:0` cross-region profile.
-- **Runtime** `udacity_agentcore_runtime-20xxVWEO4A`:
+- **Runtime** `udacity_agentcore_runtime-GF9UVdHh9F`:
   - Deployed with the AgentCore CLI 0.30.0 through `configure_runtime()`, `deploy()` and `deployed_runtime_arn()`.
   - PUBLIC network, HTTP protocol, and the foundation stack's execution role.
   - Environment variables: region, project, the 3 KB IDs, log group, guardrail ID and version.
   - `_apply_guardrail()` attaches the guardrail to every agent's model. The runtime ARN is in `.env`.
 
 ### Memory and Knowledge Bases
-- `configure_memory()` is implemented as specified:
-  - `create_memory()` with `summaryMemoryStrategy` (namespace `/summaries/{actorId}/{sessionId}`), `eventExpiryDuration=7`, plus a name and description.
-  - It waits until the resource is ACTIVE and returns its ARN.
+- `configure_memory()` calls `create_memory()` with:
+  - a `summaryMemoryStrategy` (SESSION_SUMMARY, namespace `/summaries/{actorId}/{sessionId}`);
+  - `eventExpiryDuration=7`;
+  - name `udacity_agentcore_memory` and a description.
+- It waits until the resource is ACTIVE and returns its ARN. It is idempotent: if the memory already exists, it returns the existing ARN.
+- Result: `udacity_agentcore_memory-YxJfPa8yAn` is ACTIVE, and Task 4 passes.
 - **Knowledge Bases:**
 
 | KB | ID | S3 prefix | Vector index |
 |---|---|---|---|
-| Returns | `LNCLGDGAXX` | `policies/returns/` | `returns-policy-index` |
-| Shipping | `LWPGBWJXON` | `policies/shipping/` | `shipping-policy-index` |
-| Warranty | `OS7FBOQDHG` | `policies/warranty/` | `warranty-policy-index` |
+| Returns | `EHCHIODFGJ` | `policies/returns/` | `returns-policy-index` |
+| Shipping | `YZNMGD1NK9` | `policies/shipping/` | `shipping-policy-index` |
+| Warranty | `CGR7RTNXKZ` | `policies/warranty/` | `warranty-policy-index` |
 
 All three are self-managed, use Titan Embed Text v2, use the stack's S3 Vectors bucket and are synced. Task 5 confirms that parallel retrieval returns passages from all three.
 
@@ -103,20 +119,11 @@ All three are self-managed, use Titan Embed Text v2, use the stack's S3 Vectors 
   - X-Ray: enabled, `samplingRate=1.0`.
 - Transaction Search is ACTIVE at 100% indexing. Local and deployed requests publish X-Ray traces, and the Service Map shows `NovaMart-Orchestrator` linked to the worker agents and the `KnowledgeBase:*` nodes.
 
-## Known limitation: AgentCore Memory (Task 4, 15 points)
+## Resubmission note: why the AWS account changed
 
-The first full deployment created the guardrail and runtime, then stopped at Task 4:
+The first submission scored 105/120. In the original account (`992382390542`), `CreateMemory` returned `AccessDeniedException` ("Contact customer support"), an account-level service restriction, so Task 4 couldn't be provisioned there. The reviewer accepted every other criterion and asked for the Memory resource to be created and Task 4 to pass.
 
-```text
-botocore.errorfactory.AccessDeniedException: An error occurred (AccessDeniedException)
-when calling the CreateMemory operation: Access Denied during CreateMemory:
-Unable to perform operation. Contact customer support for assistance.
-```
-
-- **Cause:** this is an account-level service restriction, not missing code or a missing IAM permission. The same deployment created the guardrail, runtime and CloudFormation stacks successfully, and AWS's message points to support rather than a policy.
-- **Workaround:** `.env` sets `AGENTCORE_MEMORY_ENABLED=false`, and `deploy_all()` skips only the Memory step (it prints a skip message). Everything else deploys.
-- **Code is ready:** `configure_memory()` is fully implemented and runs unchanged once AWS enables AgentCore Memory for the account.
-- **Effect on score:** Task 4 reports `No AgentCore Memory named 'udacity_agentcore_memory*' found`, so the automated score is 105/120 instead of 120/120. The score is reported as-is.
+The whole system was redeployed to account `065988995349`, where AgentCore Memory is available. New screenshots `01`, `03` and `04` come from this account. The other screenshots are the evidence already accepted in the first review, from the original account, so their IDs differ from the table above (see `screenshots/README.md`). **No code changes were needed:** only the account-specific values in `.env` and the AgentCore CLI deployment state changed. The `AGENTCORE_MEMORY_ENABLED` flag is still in the code, and it is now `true`.
 
 ## Standout extension 1: adversarial guardrail validation
 
@@ -148,11 +155,16 @@ The rubric suggests Strands' `DynamoDbSessionStorage`. That class **doesn't exis
 Evidence:
 - `python src/session_validation.py --live` passes.
   - Turn 1 asks about ORD-27180, the customer's oldest order. The agent graph is then discarded and rebuilt from DynamoDB.
-  - The rebuilt Orchestrator restores all 8 messages, and turn 2 correctly answers ORD-27180.
+  - The rebuilt Orchestrator restores the turn-1 messages, and turn 2 correctly answers ORD-27180.
   - Picking the newest order would give ORD-27177, so a guess can't pass.
-- Through the deployed runtime, two `invoke` calls with the same session ID (`demo1234`): the second call recalled ORD-28001 from the first.
+- Through the deployed runtime, two `invoke` calls with the same session ID: the second call recalls the order asked about in the first.
 
-This complements AgentCore Memory rather than replacing it. WorkflowState holds the results for one request, agent-sessions holds the raw conversation history, and AgentCore Memory would add summaries across sessions once the account allows it.
+How the three stores fit together:
+- **WorkflowState** holds one request's worker results.
+- **agent-sessions** holds the raw conversation history.
+- **AgentCore Memory** holds summarized context for each session.
+
+**Retention:** records expire after 7 days through the DynamoDB TTL attribute. DynamoDB deletes expired items in the background, so an expired record can stay readable for a while after its TTL. Excluding those records on read is a possible next step, raised in the review.
 
 ## How to reproduce
 

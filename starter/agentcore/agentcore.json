@@ -20,7 +20,7 @@
       "instrumentation": {
         "enableOtel": false
       },
-      "executionRoleArn": "arn:aws:iam::992382390542:role/udacity-agentcore-agentcore-role",
+      "executionRoleArn": "arn:aws:iam::065988995349:role/udacity-agentcore-agentcore-role",
       "envVars": [
         {
           "name": "AWS_REGION",
@@ -32,15 +32,15 @@
         },
         {
           "name": "RETURNS_KB_ID",
-          "value": "LNCLGDGAXX"
+          "value": "EHCHIODFGJ"
         },
         {
           "name": "SHIPPING_KB_ID",
-          "value": "LWPGBWJXON"
+          "value": "YZNMGD1NK9"
         },
         {
           "name": "WARRANTY_KB_ID",
-          "value": "OS7FBOQDHG"
+          "value": "CGR7RTNXKZ"
         },
         {
           "name": "AGENT_LOG_GROUP",
@@ -48,7 +48,7 @@
         },
         {
           "name": "GUARDRAIL_ID",
-          "value": "nn1xj4lj97ni"
+          "value": "p36iltobtfn6"
         },
         {
           "name": "GUARDRAIL_VERSION",

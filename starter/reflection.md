@@ -20,14 +20,17 @@ Lesson: when a mistake costs money or breaks the workflow, prompts should be bac
 ## Safety and observability
 The guardrail blocks the three denied topics in practice, not just in configuration: all of them returned the blocked message from the deployed runtime. The PII filter visibly anonymized customer emails. The calculation was still allowed because the pricing-negotiation topic is defined narrowly. Prompt injection was handled by the model refusing, which is why the test expects "refused" rather than "blocked". With 100% X-Ray sampling, every request appeared on the Service Map, which made routing mistakes easy to see.
 
-## AgentCore Memory limitation
-`CreateMemory` returned AccessDenied with a "contact customer support" message even though the rest of the deployment succeeded. I didn't fake the resource or the score. Memory is turned off with an explicit `.env` setting, the reason is documented, and `configure_memory()` stays ready for an account where the service is enabled. That costs 15 points (105/120).
+## AgentCore Memory and the account switch
+In my first account, `CreateMemory` returned AccessDenied with a "contact customer support" message even though the rest of the deployment succeeded. I didn't fake the resource or the score. I added an explicit `.env` switch so the rest of the system could deploy, and submitted at 105/120.
+
+For the resubmission I redeployed everything to a second account where AgentCore Memory is available. Before rebuilding anything, I ran `configure_memory()` on its own. It created `udacity_agentcore_memory-YxJfPa8yAn`, which became ACTIVE, and the full deploy then found and reused it. The move needed no code changes, only new account-specific values. That showed the configuration-driven design was worth it: every resource name comes from CloudFormation exports or `.env`, so nothing in the code was tied to the old account.
 
 ## DynamoDB session extension
 I expected a native `DynamoDbSessionStorage`, but the SDK doesn't have one, so I implemented the SDK's `SessionRepository` interface instead. The first version stored and restored history correctly, but nothing used it: the right answer came from a lucky guess. Two changes fixed this: writing the earlier turns into WorkflowState, and a test whose answer can't be guessed. It is deployed as a separate, removable stack with a policy scoped to one table, so the graded infrastructure stays untouched.
 
 ## Next steps
-- Ask AWS Support to enable AgentCore Memory, then rerun deploy for a 120/120 score.
+- Test the expired-session case explicitly (reviewer suggestion). DynamoDB TTL deletes items in the background, so the repository should ignore records whose `ttl` has passed.
+- Read the AgentCore Memory session summaries back into the Orchestrator, alongside the DynamoDB turn history.
 - Add regex filters for order-specific PII.
 - Lower X-Ray sampling to about 5% for production.
 - Use Strands hooks to enforce the tool-call order instead of checking it inside each tool.

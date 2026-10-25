@@ -1,0 +1,63 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  NovaMart extension - DynamoDB table for persistent Strands conversation
+  sessions (custom SessionRepository), plus least-privilege access for the
+  AgentCore Runtime execution role created by the udacity-agentcore stack.
+  Deployed as a separate stack so the starter stack is never modified.
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: udacity-agentcore
+  ExecutionRoleName:
+    Type: String
+    Default: udacity-agentcore-agentcore-role
+    Description: AgentCore Runtime execution role (from the udacity-agentcore stack)
+
+Resources:
+
+  # session_id (PK) + record_key (SK):
+  #   SESSION | AGENT#<agent_id> | MESSAGE#<agent_id>#<message_id:010d>
+  AgentSessionsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub ${ProjectName}-agent-sessions
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: session_id
+          AttributeType: S
+        - AttributeName: record_key
+          AttributeType: S
+      KeySchema:
+        - AttributeName: session_id
+          KeyType: HASH
+        - AttributeName: record_key
+          KeyType: RANGE
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+      SSESpecification:
+        SSEEnabled: true
+
+  # Inline policy on the existing runtime role, scoped to this table only.
+  AgentSessionsAccessPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: NovaMartAgentSessionsAccess
+      Roles:
+        - !Ref ExecutionRoleName
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+              - dynamodb:GetItem
+              - dynamodb:PutItem
+              - dynamodb:Query
+            Resource: !GetAtt AgentSessionsTable.Arn
+
+Outputs:
+  AgentSessionsTableName:
+    Value: !Ref AgentSessionsTable
+    Export:
+      Name: !Sub ${ProjectName}-AgentSessionsTable

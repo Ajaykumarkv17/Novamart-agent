@@ -1,0 +1,101 @@
+{
+  "$schema": "https://schema.agentcore.aws.dev/v1/agentcore.json",
+  "name": "udacity",
+  "version": 1,
+  "managedBy": "CDK",
+  "tags": {
+    "agentcore:created-by": "agentcore-cli",
+    "agentcore:project-name": "udacity"
+  },
+  "runtimes": [
+    {
+      "name": "agentcore_runtime",
+      "description": "NovaMart multi-agent customer support system (Strands Agents on AgentCore Runtime)",
+      "build": "CodeZip",
+      "entrypoint": "agent_orchestrator.py",
+      "codeLocation": "build/runtime/",
+      "runtimeVersion": "PYTHON_3_12",
+      "networkMode": "PUBLIC",
+      "protocol": "HTTP",
+      "instrumentation": {
+        "enableOtel": false
+      },
+      "executionRoleArn": "arn:aws:iam::992382390542:role/udacity-agentcore-agentcore-role",
+      "envVars": [
+        {
+          "name": "AWS_REGION",
+          "value": "us-east-1"
+        },
+        {
+          "name": "PROJECT_NAME",
+          "value": "udacity-agentcore"
+        },
+        {
+          "name": "RETURNS_KB_ID",
+          "value": "LNCLGDGAXX"
+        },
+        {
+          "name": "SHIPPING_KB_ID",
+          "value": "LWPGBWJXON"
+        },
+        {
+          "name": "WARRANTY_KB_ID",
+          "value": "OS7FBOQDHG"
+        },
+        {
+          "name": "AGENT_LOG_GROUP",
+          "value": "/aws/bedrock/agentcore/udacity-agentcore"
+        },
+        {
+          "name": "GUARDRAIL_ID",
+          "value": "nn1xj4lj97ni"
+        },
+        {
+          "name": "GUARDRAIL_VERSION",
+          "value": "1"
+        },
+        {
+          "name": "AGENT_LOG_LEVEL",
+          "value": "INFO"
+        },
+        {
+          "name": "AGENT_LOG_TO_CLOUDWATCH",
+          "value": "true"
+        },
+        {
+          "name": "AGENT_TRACING_ENABLED",
+          "value": "true"
+        },
+        {
+          "name": "AGENT_TRACE_SAMPLING_RATE",
+          "value": "1.0"
+        },
+        {
+          "name": "AGENT_SESSIONS_ENABLED",
+          "value": "true"
+        },
+        {
+          "name": "AGENT_SESSIONS_TABLE",
+          "value": "udacity-agentcore-agent-sessions"
+        },
+        {
+          "name": "AGENT_SESSIONS_TTL_DAYS",
+          "value": "7"
+        }
+      ]
+    }
+  ],
+  "memories": [],
+  "knowledgeBases": [],
+  "credentials": [],
+  "evaluators": [],
+  "onlineEvalConfigs": [],
+  "agentCoreGateways": [],
+  "policyEngines": [],
+  "configBundles": [],
+  "abTests": [],
+  "harnesses": [],
+  "datasets": [],
+  "capacityProviders": [],
+  "payments": []
+}
